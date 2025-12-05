@@ -1,0 +1,1992 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMSC - Sistema de Monitoreo de Seguridad Ciudadana</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Paleta de Colores Obligatoria */
+        :root {
+            --color-primary: #1F3C88; /* Azul Oscuro */
+            --color-secondary: #FFB800; /* Amarillo Alerta */
+            --color-background: #FFFFFF; /* Blanco */
+            --color-text: #333333; /* Gris Oscuro */
+            --color-critical: #E63946; /* Rojo */
+            --color-confirm: #4CAF50; /* Verde */
+        }
+
+        .bg-primary { background-color: var(--color-primary); }
+        .text-primary { color: var(--color-primary); }
+        .border-primary { border-color: var(--color-primary); }
+
+        .bg-secondary { background-color: var(--color-secondary); }
+        .text-secondary { color: var(--color-secondary); }
+
+        .bg-critical { background-color: var(--color-critical); }
+        .text-critical { color: var(--color-critical); }
+
+        .bg-confirm { background-color: var(--color-confirm); }
+        .text-confirm { color: var(--color-confirm); }
+
+        .text-dark-gray { color: var(--color-text); }
+        .bg-white { background-color: var(--color-background); }
+
+        /* Estilos base para la interfaz (diseño limpio y moderno) */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+            color: var(--color-text);
+            transition: background-color 0.3s;
+        }
+
+        /* Contenedor de la app móvil simulada */
+        .mobile-frame {
+            max-width: 420px;
+            height: 90vh; /* Para simular mejor una pantalla móvil */
+            margin: 20px auto;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            border-radius: 20px;
+            overflow: hidden;
+            background-color: var(--color-background);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Contenedor para plataforma web */
+        .web-frame {
+            min-height: 100vh;
+            display: flex;
+            background-color: #f4f7f9;
+        }
+
+        /* Estilo para inputs y botones */
+        input:focus, button:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(31, 60, 136, 0.3); /* Sombra de enfoque con color primario */
+        }
+
+        /* Mapa simulado (para todos los roles) */
+        .map-sim {
+            background-color: #a0c4ff;
+            /* Azul claro para simular un mapa */
+            background-image: url("https://placehold.co/600x400/87B4EE/ffffff/png?text=Mapa+Geoespacial");
+            background-size: cover;
+            border-radius: 8px;
+            position: relative;
+        }
+
+        /* Estilo para las alertas altas (Flash) */
+        .high-alert-flash {
+            animation: flash 0.5s infinite alternate;
+        }
+        @keyframes flash {
+            from { background-color: var(--color-critical); }
+            to { background-color: var(--color-secondary); }
+        }
+
+        /* Estilo para el botón principal de reporte (max 4 toques) */
+        .report-button {
+            transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+            box-shadow: 0 8px 15px rgba(31, 60, 136, 0.4);
+        }
+        .report-button:active {
+            transform: scale(0.95);
+            box-shadow: 0 4px 8px rgba(31, 60, 136, 0.6);
+        }
+    </style>
+</head>
+<body class="bg-white" id="appBody">
+
+    <div id="app-container" class="w-full min-h-screen flex items-center justify-center">
+    </div>
+
+    <script type="module">
+        // Importaciones de Firebase (requeridas por el entorno Canvas)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // Variables Globales de Canvas
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth;
+        // Inicialización de Firebase (Esqueleto requerido)
+        async function initializeFirebase() {
+            if (firebaseConfig) {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug');
+
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Firebase: Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(auth);
+                        console.log("Firebase: Signed in anonymously.");
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                }
+            } else {
+                console.warn("Firebase config not available. Running in UI simulation mode only.");
+            }
+        }
+
+        // Llamar a la inicialización
+        initializeFirebase();
+        
+        // --- Estado de la Aplicación ---
+        let currentRole = 'guest'; // guest, ciudadano, agente, operador, admin
+        let currentScreen = 'login';
+        let reportData = {}; // Datos temporales para el flujo de reporte
+        let highAlertActive = false; // Simulación de alarma
+        let activeIncidentId = null; // Para vistas de detalle (Operador/Agente)
+        let currentUser = null; // CRÍTICO: Para guardar el objeto del usuario logeado y su estado
+        let activeIncidentIdAgent = null; // Incidente actualmente abierto por el Agente
+
+        const appContainer = document.getElementById('app-container');
+
+        // --- Simulación de Datos ---
+        const incidentes = [
+            { id: 'INC-001', tipo: 'Robo Agravado', nivel: 'Alto', estado: 'Ayuda en camino', fecha: '2025-11-01 10:30', agenteAsignado: 'AG-101', coords: { lat: -12.04, lng: -77.03 }, descripcion: 'Dos sospechosos huyendo en dirección norte.', reportero: 'Juan L. (10203040)', reporteroId: 2 },
+            { id: 'INC-002', tipo: 'Robo', nivel: 'Medio', estado: 'En atención', fecha: '2025-11-01 11:45', agenteAsignado: 'AG-102', coords: { lat: -12.05, lng: -77.04 }, descripcion: 'Hurto de celular.', reportero: 'Ana G. (99887766)', reporteroId: 3 },
+            { id: 'INC-003', tipo: 'Sospechoso', nivel: 'Bajo', estado: 'Recibido', fecha: '2025-11-01 12:10', agenteAsignado: null, coords: { lat: -12.06, lng: -77.05 }, descripcion: 'Persona rondando vehículos.', reportero: 'Mari P. (47895612)', reporteroId: 1 },
+        ];
+        
+        // CRÍTICO: Lista estática para rastrear el estado de servicio (se usará para fusionar con `users`)
+        // Contiene el estado de servicio ('En Servicio', 'Ocupado', 'Fuera de servicio')
+        const agentes = [
+            { id: 'AG-101', nombre: 'Juan Pérez', estado: 'En Servicio', coords: { lat: -12.045, lng: -77.035 } },
+            { id: 'AG-102', nombre: 'Ana Gómez', estado: 'Ocupado', coords: { lat: -12.055, lng: -77.045 } },
+            { id: 'AG-103', nombre: 'Carlos Ruiz', estado: 'Fuera de servicio', coords: { lat: -12.065, lng: -77.055 } },
+        ];
+        
+        // CRÍTICO: Debe ser 'let' para permitir agregar nuevos usuarios
+        let users = [
+            // id: 1 (Pendiente) no debe poder reportar
+            { id: 1, dni: '47895612', nombre: 'Mari P.', estado: 'Pendiente', rol: 'Ciudadano', email: 'mari.p@example.com', password: 'password123' },
+            // id: 2 (Agente Activo)
+            { id: 2, dni: '10203040', nombre: 'Juan L.', estado: 'Activo', rol: 'Agente', email: 'agente@smsc.com', password: 'password123' },
+            { id: 3, dni: '99887766', nombre: 'Ana G.', estado: 'Suspendido', rol: 'Ciudadano', email: 'ana.g@example.com', password: 'password123' },
+            { id: 4, dni: '00000001', nombre: 'Carlos O.', estado: 'Activo', rol: 'Operador', email: 'operador@smsc.com', password: 'password123' },
+            { id: 5, dni: '00000002', nombre: 'Admin Master', estado: 'Activo', rol: 'Admin', email: 'admin@smsc.com', password: 'password123' },
+            // Usuario de prueba Ciudadano (activo) (id: 6)
+            { id: 6, dni: '11111111', nombre: 'Ciudadano Test', estado: 'Activo', rol: 'Ciudadano', email: 'ciudadano@smsc.com', password: 'password123' },
+        ];
+        
+        const zonas = [
+            { id: 'Z-001', nombre: 'Centro Histórico', color: 'rgba(31, 60, 136, 0.3)', coords: [[-12.04, -77.03], [-12.04, -77.035], [-12.035, -77.035]] },
+        ];
+        const reglas = [
+            { id: 1, tipo: 'Robo Agravado', nivel: 'Alto', reglas: ['Palabra clave "arma" en descripción.', 'Densidad > 5 incidentes/km2 en 1h'], acciones: 'Alerta instantánea a Operador. Prioridad 1' },
+            { id: 2, tipo: 'Vandalismo', nivel: 'Medio', reglas: ['Activación en zona de riesgo de tráfico.'], acciones: 'Alerta a Operador. Envío de patrulla simulada' },
+        ];
+
+        // --- Funciones de Utilidad y Gestión de Datos ---
+
+        function generateUniqueCode() {
+            return `INC-${Math.floor(Math.random() * 900) + 100}`;
+        }
+
+        function createIcon(name, size = 24, className = 'inline') {
+            return `<i data-lucide="${name}" width="${size}" height="${size}" class="${className}"></i>`;
+        }
+        
+        // Obtener color del estado para Operador
+        function getOperatorStatusColor(status) {
+            switch (status) {
+                case 'Recibido': return 'bg-secondary/80 text-white';
+                case 'Verificado': return 'bg-secondary text-white';
+                case 'Asignado': return 'bg-primary text-white';
+                case 'Ayuda en camino': return 'bg-confirm text-white';
+                case 'En atención': return 'bg-primary/80 text-white';
+                case 'Resuelto': return 'bg-confirm/80 text-white';
+                case 'Suspendido':
+                case 'No Procedente': return 'bg-critical text-white';
+                default: return 'bg-gray-500 text-white';
+            }
+        }
+
+
+        function toggleHighAlert(activate) {
+            highAlertActive = activate;
+            const dashboard = document.getElementById('operator-dashboard-view');
+            if (dashboard) {
+                if (activate) {
+                    dashboard.classList.add('high-alert-flash');
+                    // Simular alarma sonora y vibración (en un entorno real)
+                    console.warn("ALERTA ALTA ACTIVADA: Visual, Sonora y Vibración simuladas.");
+                } else {
+                    dashboard.classList.remove('high-alert-flash');
+                }
+            }
+        }
+        
+        // CRÍTICO: Función para obtener la lista definitiva de agentes (fusionando users y agentes)
+        function getAgentList() {
+            const agentMap = new Map();
+            
+            // 1. Añadir agentes de la lista estática (priorizando su estado de servicio de runtime)
+            agentes.forEach(a => {
+                agentMap.set(String(a.id), { 
+                    id: String(a.id), 
+                    nombre: a.nombre, 
+                    estado: a.estado, 
+                    coords: a.coords 
+                });
+            });
+
+            // 2. Sobrescribir/Añadir agentes desde la lista de 'users' (priorizando el estado de aprobación)
+            users.filter(u => u.rol === 'Agente').forEach(u => {
+                const agentId = String(u.id);
+                const existingAgent = agentMap.get(agentId);
+                
+                let serviceStatus = 'Fuera de servicio';
+                
+                if (u.estado === 'Activo') {
+                    serviceStatus = 'En Servicio'; // Estado predeterminado para un agente aprobado
+                } else if (u.estado === 'Suspendido') {
+                    serviceStatus = 'Fuera de servicio'; // Suspendido anula cualquier otro estado
+                }
+                
+                // Si el agente existe en el mapa (por haber tenido un estado de servicio específico como 'Ocupado'),
+                // y el usuario está activo, mantenemos el estado de servicio (En Servicio/Ocupado).
+                if (existingAgent && u.estado === 'Activo') {
+                     if (existingAgent.estado === 'Ocupado') {
+                         serviceStatus = 'Ocupado';
+                     } else if (existingAgent.estado === 'En Servicio') {
+                         serviceStatus = 'En Servicio'; 
+                     }
+                }
+                
+                // Crear o actualizar el objeto definitivo
+                const definitiveAgent = {
+                    id: agentId,
+                    nombre: u.nombre,
+                    estado: serviceStatus,
+                    coords: existingAgent?.coords || { lat: -12.05, lng: -77.04 } // Coordenadas por defecto si es nuevo
+                };
+                agentMap.set(agentId, definitiveAgent);
+            });
+
+            return Array.from(agentMap.values());
+        }
+        
+        // CRÍTICO: Función para actualizar el estado de servicio en la lista estática `agentes`
+        // Esto garantiza que los estados de runtime ('En Servicio', 'Ocupado') persistan
+        // para los agentes recién creados y sean visibles en getAgentList().
+        function updateStaticAgentStatus(agentId, newStatus) {
+            const agentIdStr = String(agentId);
+            let staticAgent = agentes.find(a => String(a.id) === agentIdStr);
+
+            if (!staticAgent) {
+                // Si no existe, buscamos el usuario y lo agregamos a la lista estática
+                const user = users.find(u => String(u.id) === agentIdStr);
+                if (user) {
+                    staticAgent = { 
+                        id: agentIdStr, 
+                        nombre: user.nombre, 
+                        estado: newStatus, 
+                        coords: { lat: -12.05, lng: -77.04 } 
+                    };
+                    agentes.push(staticAgent);
+                }
+            } else {
+                staticAgent.estado = newStatus;
+            }
+        }
+
+
+        // --- Lógica de Navegación y Renderizado ---
+
+        function getMobileContent() {
+            switch (currentScreen) {
+                case 'login':
+                case 'register':
+                case 'recover':
+                    return getLoginView();
+                case 'citizen-home':
+                case 'citizen-report-step1':
+                case 'citizen-report-step2':
+                case 'citizen-report-step3':
+                case 'citizen-history':
+                case 'citizen-notifications':
+                    return getCitizenApp();
+                case 'citizen-register-pending': // CRÍTICO: Nueva vista de estado Pendiente
+                    return getCitizenPendingContent();
+                case 'agent-home':
+                case 'agent-incident-reception':
+                case 'agent-incident-detail':
+                case 'agent-close-form':
+                    return getAgentApp();
+                default:
+                    return getLoginView();
+            }
+        }
+
+        function getWebContent() {
+            // Las vistas web siempre usan la estructura de layout con barra lateral
+            return getWebLayout(currentRole);
+        }
+
+        function render() {
+            const isMobileApp = ['ciudadano', 'agente', 'guest'].includes(currentRole) ||
+                ['login', 'register', 'recover', 'citizen-register-pending'].includes(currentScreen);
+            
+            if (isMobileApp) {
+                appContainer.className = 'w-full min-h-screen flex items-center justify-center';
+                appContainer.innerHTML = `
+                    <div class="mobile-frame w-full h-full lg:w-auto lg:h-[90vh]">
+                        ${getMobileContent()}
+                    </div>
+                `;
+            } else {
+                appContainer.className = 'w-full min-h-screen';
+                appContainer.innerHTML = getWebContent();
+            }
+
+            // Inicializar iconos de Lucide después de inyectar el HTML
+            lucide.createIcons();
+        }
+
+        function navigate(screenId, role = currentRole) {
+            currentScreen = screenId;
+            currentRole = role;
+
+            if (currentScreen === 'operator-dashboard' && highAlertActive) {
+                 // Si se navega al dashboard y hay alerta alta, asegurarse de que esté visible.
+                toggleHighAlert(true);
+            } else if (currentScreen !== 'operator-dashboard') {
+                // Desactivar alerta si se sale del dashboard (solo para simulación)
+                toggleHighAlert(false);
+            }
+
+            // Reiniciar datos de reporte al iniciar un nuevo flujo
+            if (currentScreen === 'citizen-report-step1') {
+                reportData = { tipo: null, nivel: 'Bajo', multimedia: [], gps: true, descripcion: '' };
+            }
+
+            render();
+            window.scrollTo(0, 0); // Scroll al inicio en cada navegación
+        }
+
+        // --- Contenido Específico por Rol ---
+
+        // ====================================================================
+        // A. Ciudadano (App móvil)
+        // ====================================================================
+
+        function getCitizenApp() {
+            // Header
+            let header = `
+                <div class="p-4 bg-primary text-white flex justify-between items-center shadow-lg">
+                    <h1 class="text-xl font-bold">SMSC - Ciudadano</h1>
+                    <button onclick="navigate('login', 'guest'); currentUser = null;" class="p-2 rounded-full hover:bg-white/10 transition">${createIcon('log-out', 20)}</button>
+                </div>
+            `;
+            // Footer
+            let footer = `
+                <div class="flex justify-around items-center border-t border-gray-200 bg-white p-2">
+                    <button onclick="navigate('citizen-home')" class="flex flex-col items-center p-2 text-${currentScreen === 'citizen-home' ? 'primary' : 'dark-gray'} hover:text-secondary transition">
+                        ${createIcon('home', 24)}
+                        <span class="text-xs">Inicio</span>
+                    </button>
+                    <button onclick="navigate('citizen-history')" class="flex flex-col items-center p-2 text-${currentScreen === 'citizen-history' ? 'primary' : 'dark-gray'} hover:text-secondary transition">
+                        ${createIcon('file-text', 24)}
+                        <span class="text-xs">Historial</span>
+                    </button>
+                    <div class="w-20 h-20 -mt-10">
+                        ${currentUser?.estado === 'Activo' ? `
+                            <button onclick="navigate('citizen-report-step1')" class="report-button w-full h-full rounded-full bg-critical text-white flex items-center justify-center">${createIcon('alert-triangle', 36)}</button>
+                        ` : `
+                            <div class="w-full h-full rounded-full bg-gray-400 text-white flex items-center justify-center opacity-50 cursor-not-allowed">${createIcon('alert-triangle', 36)}</div>
+                        `}
+                    </div>
+                    <button onclick="navigate('citizen-notifications')" class="flex flex-col items-center p-2 text-${currentScreen === 'citizen-notifications' ? 'primary' : 'dark-gray'} hover:text-secondary transition">
+                        ${createIcon('bell', 24)}
+                        <span class="text-xs">Alertas</span>
+                    </button>
+                    <button onclick="alert('Funcionalidad de Perfil Simulada')" class="flex flex-col items-center p-2 text-dark-gray hover:text-secondary transition">
+                        ${createIcon('user', 24)}
+                        <span class="text-xs">Perfil</span>
+                    </button>
+                </div>
+            `;
+            let content;
+            switch (currentScreen) {
+                case 'citizen-home':
+                    content = getCitizenHomeContent();
+                    break;
+                case 'citizen-report-step1':
+                case 'citizen-report-step2':
+                case 'citizen-report-step3':
+                    content = getCitizenReportContent();
+                    footer = ''; // Ocultar footer durante el reporte
+                    break;
+                case 'citizen-history':
+                    content = getCitizenHistoryContent();
+                    break;
+                case 'citizen-notifications':
+                    content = getCitizenNotificationsContent();
+                    break;
+                default:
+                    content = getCitizenHomeContent();
+            }
+
+            return `
+                ${header} 
+                <div class="flex-grow overflow-y-auto p-4 md:p-6">
+                    ${content}
+                </div>
+                ${footer}
+            `;
+        }
+        
+        // NUEVA VISTA: Ciudadano pendiente de aprobación (CRÍTICO)
+        function getCitizenPendingContent() {
+            return `
+                <div class="mobile-frame w-full h-full lg:w-auto lg:h-[90vh] bg-white flex flex-col items-center justify-center p-6 text-center">
+                    <div class="p-8 bg-secondary/10 border-2 border-secondary rounded-xl shadow-lg">
+                        <div class="text-secondary">${createIcon('clock', 64, 'mx-auto')}</div>
+                        <h2 class="text-3xl font-bold mt-4 text-secondary">Registro Pendiente</h2>
+                        <p class="text-lg text-dark-gray mt-2">
+                            Gracias por registrarte, ${currentUser?.nombre || 'Ciudadano'}.
+                        </p>
+                        <p class="text-sm text-gray-600 mt-4">
+                            Tu cuenta está siendo revisada por nuestro equipo de Administradores. Una vez aprobada (estado **"Activo"**), podrás acceder a la funcionalidad de reporte de incidentes.
+                        </p>
+                        <p class="text-sm font-semibold text-primary mt-4">
+                            Revisa tu estado más tarde.
+                        </p>
+                    </div>
+                    <button onclick="navigate('login', 'guest'); currentUser = null;" class="w-full max-w-xs p-3 rounded-lg bg-primary text-white font-semibold mt-6">
+                        ${createIcon('log-out', 20, 'mr-2')} Cerrar Sesión
+                    </button>
+                </div>
+            `;
+        }
+
+        // Home del Ciudadano
+        function getCitizenHomeContent() {
+            
+            // CRÍTICO: Bloquear funciones si no está Activo
+            if (currentUser && currentUser.estado !== 'Activo') {
+                 return `
+                    <h2 class="text-2xl font-bold text-dark-gray mb-6">Hola, ${currentUser.nombre}!</h2>
+                    <div class="p-8 bg-secondary/10 border-2 border-secondary rounded-xl text-center shadow-lg">
+                        <div class="text-secondary">${createIcon('lock', 48, 'mx-auto')}</div>
+                        <h3 class="text-xl font-bold mt-4 text-secondary">Reporte Desactivado</h3>
+                        <p class="text-md text-dark-gray mt-2">
+                            Tu estado actual es: <span class="font-bold">${currentUser.estado}</span>.
+                        </p>
+                        <p class="text-sm text-gray-600 mt-2">
+                            Debes tener el estado **"Activo"** para poder reportar incidentes. Por favor, espera la aprobación del administrador.
+                        </p>
+                    </div>
+                    <div onclick="navigate('citizen-history')" class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition cursor-pointer mt-6">
+                        <div class="text-primary">${createIcon('list', 30)}</div>
+                        <p class="font-semibold mt-2">Ver Historial de Reportes</p>
+                    </div>
+                `;
+            }
+            
+            // Simular pregunta al inicio
+            const gpsWarning = `
+                <div class="bg-secondary/20 border-l-4 border-secondary p-4 rounded-lg mb-6 shadow-sm">
+                    <p class="font-semibold text-dark-gray flex items-center">${createIcon('map-pin', 20, 'mr-2')} ¿Activar GPS?</p>
+                    <p class="text-sm text-gray-700 mt-1">Activa tu ubicación para que, en caso de emergencia, tus coordenadas sean enviadas automáticamente.</p>
+                    <button class="mt-2 text-sm text-primary font-medium" onclick="alert('GPS Activado Simuladamente'); this.parentElement.remove();">Activar Ahora</button>
+                </div>
+            `;
+            const statusSection = `
+                <div class="p-4 bg-primary text-white rounded-lg shadow-xl mb-6">
+                    <h3 class="text-lg font-semibold flex items-center">${createIcon('shield-check', 20, 'mr-2')} Estado de Zona</h3>
+                    <p class="text-2xl font-bold mt-1">Normal</p>
+                    <p class="text-sm opacity-80">Av. Las Flores 123 - Conexión: <span class="text-confirm font-medium">Estable</span></p>
+                </div>
+            `;
+            return `
+                ${gpsWarning}
+                <h2 class="text-2xl font-bold text-dark-gray mb-6">Hola, ${currentUser?.nombre || 'Ciudadano'}!</h2>
+
+                <div class="flex justify-center mb-10">
+                    <button onclick="navigate('citizen-report-step1')" class="report-button w-48 h-48 rounded-full bg-critical text-white flex flex-col items-center justify-center text-center">
+                        ${createIcon('siren', 48)}
+                        <span class="text-xl font-bold mt-2">REPORTAR INCIDENTE</span>
+                        <span class="text-sm font-medium">¡4 toques máx!</span>
+                    </button>
+                </div>
+
+                ${statusSection}
+
+                <h3 class="text-xl font-semibold text-dark-gray mb-4">Tu Seguridad</h3>
+                <div class="grid grid-cols-2 gap-4">
+                    <div onclick="navigate('citizen-history')" class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition cursor-pointer">
+                        <div class="text-primary">${createIcon('list', 30)}</div>
+                        <p class="font-semibold mt-2">Historial de Reportes</p>
+                    </div>
+                    <div onclick="navigate('citizen-notifications')" class="p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition cursor-pointer">
+                        <div class="text-secondary">${createIcon('megaphone', 30)}</div>
+                        <p class="font-semibold mt-2">Notificaciones SMSC</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Reporte de Incidente (Flujo 4 toques max RNF-004)
+        function getCitizenReportContent() {
+            // Pasos para la simulación
+            const steps = [
+                { id: 'citizen-report-step1', title: '1. Tipo y Nivel de Alerta' },
+                { id: 'citizen-report-step2', title: '2. Detalles y Multimedia' },
+                { id: 'citizen-report-step3', title: '3. Enviar y Confirmar' }
+            ];
+            const currentStepIndex = steps.findIndex(s => s.id === currentScreen);
+            const currentStep = steps[currentStepIndex];
+            // Barra de progreso visual
+            const progressBar = `
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-dark-gray">${currentStep.title}</h2>
+                    <div class="flex justify-between items-center mt-3">
+                        ${steps.map((step, index) => `
+                            <div class="flex-1 ${index < currentStepIndex ? 'bg-confirm' : (index === currentStepIndex ? 'bg-primary' : 'bg-gray-300')} h-1 rounded-full ${index < steps.length - 1 ? 'mr-1' : ''}"></div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            let stepContent = '';
+            let actionButton = '';
+
+            // --- STEP 1: Tipo y Nivel (MODIFICADO para solo delincuenciales) ---
+            if (currentScreen === 'citizen-report-step1') {
+                const types = [
+                    { label: 'Asalto', icon: 'hand-metal', nivel: 'Alto' },
+                    { label: 'Robo Agravado', icon: 'skull', nivel: 'Alto' }, 
+                    { label: 'Robo', icon: 'shopping-bag', nivel: 'Medio' },
+                    { label: 'Vandalismo', icon: 'hammer', nivel: 'Bajo' },
+                    { label: 'Sospechoso', icon: 'eye', nivel: 'Bajo' },
+                    { label: 'Otros Delincuenciales', icon: 'ellipsis', nivel: 'Seleccionar' },
+                ];
+                stepContent = `
+                    <p class="text-lg mb-4">Selecciona el tipo de incidente delincuencial:</p>
+                    <div class="grid grid-cols-3 gap-3">
+                        ${types.map(t => `
+                            <button onclick="selectIncidentType('${t.label}', '${t.nivel}')"
+                                class="p-3 border-2 rounded-lg text-center transition ${reportData.tipo === t.label ? 'border-primary bg-primary/10' : 'border-gray-200 bg-white hover:border-primary'}">
+                                ${createIcon(t.icon, 32, 'mx-auto')}
+                                <span class="text-sm font-medium mt-1">${t.label}</span>
+                                <span class="text-xs ${t.nivel === 'Alto' ? 'text-critical' : (t.nivel === 'Medio' ? 'text-secondary' : 'text-confirm')}">(${t.nivel})</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                    <p class="mt-6 text-sm text-gray-500">Nivel de alerta automático: ${reportData.nivel}</p>
+                    <input type="hidden" id="report-description-1" value="Incidente reportado desde la app móvil.">
+                `;
+                actionButton = `<button id="next-step-btn" onclick="navigate('citizen-report-step2')" class="w-full p-4 rounded-lg bg-primary text-white font-bold mt-6 disabled:opacity-50" ${reportData.tipo ? '' : 'disabled'}>Siguiente (Toque 2)</button>`;
+            }
+
+            // --- STEP 2: Multimedia y Ubicación ---
+            if (currentScreen === 'citizen-report-step2') {
+                const initialCode = reportData.codigo || generateUniqueCode();
+                reportData.codigo = initialCode;
+
+                stepContent = `
+                    <p class="text-center text-3xl font-bold text-critical mb-4">${reportData.codigo}</p>
+                    <p class="text-lg font-semibold mb-3">Ubicación y Detalles</p>
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-4">
+                        <div class="flex items-center justify-between">
+                            <label class="font-medium flex items-center">${createIcon('map-pin', 20, 'mr-2')} Activar GPS (Obligatorio)</label>
+                            <span class="text-confirm font-bold">ACTIVO</span>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-1">Se enviarán tus coordenadas exactas.</p>
+                        <div class="map-sim h-40 w-full mt-3 rounded-lg flex items-center justify-center text-white text-xs">Ubicación Actual Simulada</div>
+                    </div>
+
+                    <label for="multimedia-input" class="block font-medium mb-2 flex items-center">${createIcon('camera', 20, 'mr-2')} Adjuntar Multimedia (Opcional)</label>
+                    <div class="flex space-x-2 mb-4">
+                        <button onclick="alert('Simulación: Adjuntar Foto')" class="flex-1 p-3 border border-gray-300 rounded-lg text-dark-gray hover:bg-gray-100">${createIcon('image', 20)} Foto</button>
+                        <button onclick="alert('Simulación: Adjuntar Video (<15MB)')" class="flex-1 p-3 border border-gray-300 rounded-lg text-dark-gray hover:bg-gray-100">${createIcon('video', 20)} Video</button>
+                        <button onclick="alert('Simulación: Adjuntar Audio (<5MB)')" class="flex-1 p-3 border border-gray-300 rounded-lg text-dark-gray hover:bg-gray-100">${createIcon('mic', 20)} Audio</button>
+                    </div>
+
+                    <label for="descripcion-input" class="block font-medium mb-2">Descripción Adicional (Opcional)</label>
+                    <textarea id="descripcion-input" rows="2" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50" placeholder="Ej: Dos sospechosos huyendo..."></textarea>
+                `;
+                actionButton = `<button id="send-report-btn" onclick="sendReport()" class="w-full p-4 rounded-lg bg-critical text-white font-bold mt-6">Enviar Reporte (Toque 3)</button>`;
+            }
+
+            // --- Mensaje de Confirmación (Implícito en el flujo, después de Toque 3) ---
+            if (currentScreen === 'citizen-report-step3') {
+                stepContent = `
+                    <div class="p-8 bg-confirm/10 border-2 border-confirm rounded-xl text-center shadow-lg">
+                        <div class="text-confirm">${createIcon('check-circle', 64, 'mx-auto')}</div>
+                        <h2 class="text-3xl font-bold mt-4 text-confirm">¡Reporte Enviado!</h2>
+                        <p class="text-lg text-dark-gray mt-2">Tu incidente ha sido registrado bajo el código:</p>
+                        <p class="text-4xl font-extrabold text-primary my-4">${reportData.codigo}</p>
+                        <p class="text-sm text-gray-600">El Centro de Monitoreo ha sido alertado. Consulta el estado en tu historial.</p>
+                    </div>
+                    <button onclick="navigate('citizen-home')" class="w-full p-3 rounded-lg bg-primary text-white font-semibold mt-6">Volver al Inicio</button>
+                `;
+                actionButton = ''; // No hay más acción en este paso
+            }
+
+            return `<div class="p-0">${progressBar}${stepContent}${actionButton}</div>`;
+        }
+
+        // Lógica de simulación para el reporte
+        function selectIncidentType(type, nivel) {
+            reportData.tipo = type;
+            reportData.nivel = nivel;
+            const nextButton = document.getElementById('next-step-btn');
+            if (nextButton) {
+                nextButton.disabled = false;
+            }
+            render();
+        }
+
+        function sendReport() {
+            // Toque 3
+            reportData.descripcion = document.getElementById('descripcion-input').value.trim() || 'Sin descripción adicional.';
+            
+            // Simulación: Guardar el incidente en la lista global
+            incidentes.unshift({
+                id: reportData.codigo,
+                tipo: reportData.tipo,
+                nivel: reportData.nivel,
+                estado: 'Recibido', // Estado inicial para Operador
+                fecha: new Date().toISOString().split('T')[0] + ' ' + new Date().toLocaleTimeString(),
+                agenteAsignado: null,
+                coords: { lat: -12.04 + (Math.random() * 0.01), lng: -77.03 + (Math.random() * 0.01) },
+                descripcion: reportData.descripcion,
+                // CRÍTICO: Identificación del reportero logeado
+                reportero: currentUser ? `${currentUser.nombre} (${currentUser.dni})` : 'Ciudadano Desconocido',
+                reporteroId: currentUser ? currentUser.id : 'N/A'
+            });
+
+            // Si es un incidente de nivel Alto, activar alerta al operador (simulación)
+            if (reportData.nivel === 'Alto') {
+                toggleHighAlert(true);
+            }
+
+            // Navegar al paso de confirmación
+            navigate('citizen-report-step3');
+        }
+
+        function getCitizenHistoryContent() {
+            // CRÍTICO: Filtrar por el ID del usuario logeado
+            const userIncidents = incidentes.filter(i => i.reporteroId === currentUser?.id); 
+
+            if (userIncidents.length === 0) {
+                return `
+                    <h2 class="text-2xl font-bold text-dark-gray mb-6">Historial de Reportes</h2>
+                    <div class="p-6 bg-gray-100 rounded-xl text-center shadow-sm">
+                        <div class="text-primary">${createIcon('folder-open', 40, 'mx-auto')}</div>
+                        <p class="text-lg font-semibold mt-3">Aún no has realizado reportes.</p>
+                        <p class="text-sm text-gray-500 mt-1">Cuando lo hagas, aparecerán aquí.</p>
+                    </div>
+                `;
+            }
+
+            return `
+                <h2 class="text-2xl font-bold text-dark-gray mb-6">Historial de Reportes</h2>
+                <div class="space-y-4">
+                    ${userIncidents.map(i => {
+                        // Usar la función del operador para la coherencia de colores de estado
+                        const statusColor = getOperatorStatusColor(i.estado); 
+                        const levelColor = i.nivel === 'Alto' ? 'text-critical' : (i.nivel === 'Medio' ? 'text-secondary' : 'text-confirm');
+                        
+                        // CRÍTICO: Buscar el agente en la lista definitiva
+                        const assignedAgent = getAgentList().find(a => a.id === i.agenteAsignado);
+                        
+                        return `
+                            <div class="bg-white p-4 rounded-lg shadow-md border-l-4 border-primary">
+                                <div class="flex justify-between items-start">
+                                    <h3 class="text-lg font-bold text-dark-gray">${i.tipo} (${i.id})</h3>
+                                    <span class="px-2 py-1 text-xs font-bold ${statusColor.includes('bg-') ? statusColor : 'bg-gray-500'}">${i.estado}</span>
+                                </div>
+                                <p class="text-sm text-gray-500 mt-1">Nivel: <span class="font-semibold ${levelColor}">${i.nivel}</span> | Fecha: ${i.fecha}</p>
+                                <p class="text-sm mt-2 text-dark-gray">${i.descripcion.substring(0, 50)}${i.descripcion.length > 50 ? '...' : ''}</p>
+                                ${i.agenteAsignado ? `<p class="text-xs text-primary mt-1">Asignado: ${assignedAgent?.nombre || i.agenteAsignado}</p>` : ''}
+                                <button onclick="alert('Ver detalles de ${i.id}')" class="mt-2 text-sm text-primary font-semibold hover:underline">Ver Detalles</button>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        function getCitizenNotificationsContent() {
+            const notificaciones = [
+                { id: 1, tipo: 'Riesgo', titulo: '¡Alerta de Robo en la Zona!', mensaje: 'Se reportó un robo cerca de tu ubicación. Tómate un desvío y mantente alerta.', fecha: '2025-11-01 15:00', icon: 'zap' },
+                { id: 2, tipo: 'Aglomeración', titulo: 'Alta Aglomeración de Incidentes', mensaje: 'Evita el sector Céntrico por alta incidencia de reportes en las últimas horas.', fecha: '2025-11-01 14:00', icon: 'users' },
+                { id: 3, tipo: 'Consejo', titulo: 'Recomendación Preventiva', mensaje: 'Recuerda no usar tu teléfono en zonas oscuras o poco transitadas.', fecha: '2025-10-28 09:00', icon: 'lightbulb' },
+            ];
+
+            return `
+                <h2 class="text-2xl font-bold text-dark-gray mb-6">Notificaciones SMSC</h2>
+                <div class="space-y-4">
+                    ${notificaciones.map(n => `
+                        <div class="p-4 bg-white rounded-lg shadow-sm border-l-4 border-primary hover:shadow-md transition">
+                            <div class="flex items-start">
+                                <div class="text-primary mr-3">${createIcon(n.icon, 24)}</div>
+                                <div>
+                                    <h3 class="text-lg font-bold text-dark-gray">${n.titulo}</h3>
+                                    <p class="text-sm text-gray-700 mt-1">${n.mensaje}</p>
+                                    <p class="text-xs text-gray-500 mt-2">${n.fecha}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        // ====================================================================
+        // B. Agente de Respuesta (App móvil)
+        // ====================================================================
+
+        // CRÍTICO: Función para asegurar la coherencia del agente logeado (usa getAgentList)
+        function getCurrentAgentSimulated() {
+            if (!currentUser || currentUser.rol !== 'Agente') return getAgentList()[0]; // Fallback
+            
+            const agentList = getAgentList();
+            // Buscar por el ID del usuario logeado (convertido a string para consistencia)
+            const agent = agentList.find(a => a.id === String(currentUser.id)); 
+
+            // Si el agente no está en la lista fusionada (caso muy raro con getAgentList, pero seguro)
+            if (!agent) {
+                return { 
+                    id: String(currentUser.id), 
+                    nombre: currentUser.nombre, 
+                    estado: currentUser.estado === 'Activo' ? 'En Servicio' : 'Fuera de servicio',
+                    coords: { lat: -12.05, lng: -77.04 }
+                };
+            }
+            return agent;
+        }
+
+        function setActiveIncidentIdAgent(id) { activeIncidentIdAgent = id; }
+
+        // CRÍTICO: Se modifica para usar updateStaticAgentStatus
+        function setAgentStatus(newStatus) {
+            const agent = getCurrentAgentSimulated();
+            if (agent) {
+                // 1. Actualizar el estado del usuario (para la vista Admin)
+                const user = users.find(u => String(u.id) === agent.id);
+                if (user) {
+                    user.estado = newStatus === 'En Servicio' ? 'Activo' : 'Inactivo';
+                }
+                
+                // 2. Actualizar el estado en la lista estática de agentes (para persistencia de servicio)
+                updateStaticAgentStatus(agent.id, newStatus);
+            }
+            navigate('agent-home', 'agente');
+        }
+
+        function getAgentApp() {
+            const statusColor = { 'En Servicio': 'bg-confirm', 'Ocupado': 'bg-secondary', 'Fuera de servicio': 'bg-critical', 'Inactivo': 'bg-critical' };
+            const currentAgent = getCurrentAgentSimulated();
+
+            // Header (igual)
+            let header = `
+                <div class="p-4 bg-primary text-white flex justify-between items-center shadow-lg">
+                    <h1 class="text-xl font-bold">SMSC - Agente</h1>
+                    <button onclick="navigate('login', 'guest'); currentUser = null;" class="p-2 rounded-full hover:bg-white/10 transition">${createIcon('log-out', 20)}</button>
+                </div>
+            `;
+            // Footer (simulación)
+            let footer = `
+                <div class="flex justify-around items-center border-t border-gray-200 bg-white p-2">
+                    <button onclick="navigate('agent-home')" class="flex flex-col items-center p-2 text-${currentScreen === 'agent-home' ? 'primary' : 'dark-gray'} hover:text-secondary transition">
+                        ${createIcon('home', 24)}
+                        <span class="text-xs">Inicio</span>
+                    </button>
+                    <button onclick="alert('Funcionalidad de Chat Simulada')" class="flex flex-col items-center p-2 text-dark-gray hover:text-secondary transition">
+                        ${createIcon('message-square', 24)}
+                        <span class="text-xs">Chat</span>
+                    </button>
+                    <button onclick="alert('Funcionalidad de Perfil Simulada')" class="flex flex-col items-center p-2 text-dark-gray hover:text-secondary transition">
+                        ${createIcon('user', 24)}
+                        <span class="text-xs">Perfil</span>
+                    </button>
+                </div>
+            `;
+            let content;
+            switch (currentScreen) {
+                case 'agent-home':
+                    content = getAgentHomeContent(currentAgent, statusColor);
+                    break;
+                case 'agent-incident-reception':
+                    content = getAgentIncidentReceptionContent(currentAgent);
+                    footer = '';
+                    break;
+                case 'agent-incident-detail':
+                    content = getAgentIncidentDetailContent(currentAgent, statusColor);
+                    footer = '';
+                    break;
+                case 'agent-close-form':
+                    content = getAgentCloseFormContent(activeIncidentIdAgent);
+                    footer = '';
+                    break;
+                default:
+                    content = getAgentHomeContent(currentAgent, statusColor);
+            }
+
+            return `
+                ${header} 
+                <div class="flex-grow overflow-y-auto p-4 md:p-6">
+                    ${content}
+                </div>
+                ${footer}
+            `;
+        }
+
+        // CRÍTICO: Modificado para usar currentAgent.id (que ahora es el ID de usuario como string)
+        function getAgentHomeContent(currentAgent, statusColor) {
+            // Si el agente está fuera de servicio
+            if (currentAgent.estado === 'Fuera de servicio' || currentAgent.estado === 'Inactivo') {
+                // Botón de cambio de estado
+                return `
+                    <h2 class="text-2xl font-bold text-dark-gray mb-6">Panel del Agente</h2>
+                    <div class="p-6 bg-gray-100 rounded-xl text-center shadow-md">
+                        <p class="text-lg font-semibold mb-4">Estado Actual:</p>
+                        <span class="inline-block px-4 py-2 text-white font-bold rounded-full ${statusColor[currentAgent.estado]}">${currentAgent.estado}</span>
+                        <p class="text-sm text-gray-500 mt-4">Debes estar "En Servicio" para recibir casos.</p>
+                        <button onclick="setAgentStatus('En Servicio')" class="mt-4 w-full p-3 rounded-lg bg-confirm text-white font-semibold">Cambiar a En Servicio</button>
+                    </div>
+                `;
+            }
+            
+            // CRÍTICO: Filtrar incidentes asignados al ID del agente logeado
+            const assignedIncidents = incidentes.filter(i => i.agenteAsignado === currentAgent.id && i.estado !== 'Resuelto' && i.estado !== 'No Procedente');
+
+            // Simulación de recepción de caso: Buscar un caso con estado 'Asignado' y asignado a este agente.
+            const incomingIncident = currentAgent.estado === 'En Servicio' ? assignedIncidents.find(i => i.estado === 'Asignado') : null;
+            if (incomingIncident && currentScreen === 'agent-home') {
+                // Si hay un caso Asignado, el agente debe ir a la vista de recepción para aceptarlo.
+                setActiveIncidentIdAgent(incomingIncident.id); // Asegurar que el ID activo sea este
+                navigate('agent-incident-reception', 'agente'); 
+                return `<div>Redirigiendo a recepción de incidente...</div>`;
+            }
+            
+            return `
+                <h2 class="text-2xl font-bold text-dark-gray mb-6">Panel del Agente</h2>
+                <div class="p-4 bg-primary text-white rounded-lg shadow-xl mb-6 flex justify-between items-center">
+                    <div>
+                        <p class="text-lg font-semibold">Estado Actual:</p>
+                        <span class="inline-block px-3 py-1 text-sm font-bold rounded-full ${statusColor[currentAgent.estado]}">${currentAgent.estado}</span>
+                    </div>
+                    <button onclick="setAgentStatus('Fuera de servicio')" class="bg-critical/80 hover:bg-critical p-2 rounded-full transition">${createIcon('power', 24)}</button>
+                </div>
+
+                <div class="bg-white p-4 rounded-xl shadow-lg">
+                    <h3 class="text-xl font-bold text-primary mb-4">Casos Asignados (${assignedIncidents.length})</h3>
+                    <div class="space-y-3">
+                        ${assignedIncidents.length > 0 ? assignedIncidents.map(inc => `
+                            <div onclick="setActiveIncidentIdAgent('${inc.id}'); navigate('agent-incident-detail')" class="p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition cursor-pointer">
+                                <div class="flex justify-between items-center">
+                                    <p class="font-bold text-dark-gray">${inc.tipo} (${inc.id})</p>
+                                    <span class="px-2 py-1 text-xs font-bold text-white rounded-full ${getOperatorStatusColor(inc.estado)}">${inc.estado}</span>
+                                </div>
+                                <p class="text-sm text-gray-500 mt-1">Nivel: ${inc.nivel} | Reportado: ${inc.fecha.split(' ')[0]}</p>
+                            </div>
+                        `).join('') : `
+                            <div class="p-4 text-center text-gray-500">
+                                ${createIcon('check-circle', 32, 'mx-auto')}
+                                <p class="mt-2">No tienes casos asignados actualmente. ¡Gracias por mantener la zona segura!</p>
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function getAgentIncidentReceptionContent(currentAgent) {
+            // Usa activeIncidentIdAgent que fue seteado en getAgentHomeContent
+            const receptionIncident = incidentes.find(i => i.id === activeIncidentIdAgent && i.estado === 'Asignado' && i.agenteAsignado === currentAgent.id);
+            if (!receptionIncident) {
+                navigate('agent-home', 'agente');
+                return `<div>Redirigiendo... No hay incidentes pendientes de recepción.</div>`;
+            }
+
+            return `
+                <div class="p-4 text-center bg-critical/10 rounded-xl shadow-lg border-2 border-critical">
+                    <div class="text-critical">${createIcon('alert-triangle', 48, 'mx-auto')}</div>
+                    <h2 class="text-2xl font-bold mt-2 text-critical">NUEVO INCIDENTE ASIGNADO</h2>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-lg mt-4">
+                    <p class="text-sm text-gray-500">CÓDIGO: ${receptionIncident.id}</p>
+                    <p class="text-2xl font-extrabold my-2">${receptionIncident.tipo}</p>
+                    <p class="text-sm mb-4">NIVEL: <span class="font-bold text-critical">${receptionIncident.nivel}</span></p>
+                    <p class="text-sm mb-4">${receptionIncident.descripcion}</p>
+                    <div class="map-sim h-40 w-full rounded-lg mb-4 text-xs flex items-center justify-center border-2 border-white">Ubicación de Emergencia Simulada</div>
+                    <p class="font-semibold mb-3">¿Aceptas la asignación inmediata?</p>
+                    <div class="flex space-x-4">
+                        <button onclick="acceptIncident('${receptionIncident.id}')" class="flex-1 p-3 rounded-lg bg-confirm text-white font-bold hover:bg-confirm/90">${createIcon('check', 20)} ACEPTAR</button>
+                        <button onclick="rejectIncident('${receptionIncident.id}')" class="flex-1 p-3 rounded-lg bg-white text-critical font-bold hover:bg-gray-200">RECHAZAR</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // CRÍTICO: Modificado para usar updateStaticAgentStatus
+        function acceptIncident(incidentId) {
+            const inc = incidentes.find(i => i.id === incidentId);
+            const currentAgent = getCurrentAgentSimulated();
+
+            if (inc) {
+                inc.agenteAsignado = currentAgent.id;
+                inc.estado = 'Ayuda en camino';
+                // Agente ocupado (actualizar estático)
+                updateStaticAgentStatus(currentAgent.id, 'Ocupado');
+            }
+            setActiveIncidentIdAgent(incidentId);
+            alert(`Incidente ${incidentId} aceptado. Estado: Ayuda en camino. Agente: Ocupado.`);
+            navigate('agent-incident-detail', 'agente');
+        }
+
+        // CRÍTICO: Modificado para usar updateStaticAgentStatus
+        function rejectIncident(incidentId) {
+            const inc = incidentes.find(i => i.id === incidentId);
+            const currentAgent = getCurrentAgentSimulated();
+
+            if (inc) {
+                inc.agenteAsignado = null;
+                inc.estado = 'Verificado'; // Devuelve al operador para reasignación
+                // Agente libre (actualizar estático)
+                updateStaticAgentStatus(currentAgent.id, 'En Servicio'); 
+            }
+            alert(`Incidente ${incidentId} rechazado. Vuelve a la cola del Operador.`);
+            setActiveIncidentIdAgent(null); // Limpiar incidente activo
+            navigate('agent-home', 'agente');
+        }
+
+        function getAgentIncidentDetailContent(currentAgent, statusColor) {
+            const activeIncident = incidentes.find(i => i.id === activeIncidentIdAgent);
+            if (!activeIncident || activeIncident.agenteAsignado !== currentAgent.id) {
+                navigate('agent-home', 'agente');
+                return `<div>Incidente no encontrado o no asignado.</div>`;
+            }
+
+            // Flujo de estado: Ayuda en camino -> En atención -> Resuelto (o formulario de cierre)
+            const nextStatusMap = { 'Ayuda en camino': 'En atención', 'En atención': 'Cerrar Caso' };
+            const nextStatus = nextStatusMap[activeIncident.estado];
+
+            const levelColor = activeIncident.nivel === 'Alto' ? 'text-critical' : (activeIncident.nivel === 'Medio' ? 'text-secondary' : 'text-confirm');
+            
+            return `
+                <h2 class="text-2xl font-bold text-primary mb-6">Incidente Asignado: ${activeIncident.id}</h2>
+                <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-primary">
+                    <p class="text-xl font-bold text-dark-gray mb-4">${activeIncident.tipo}</p>
+                    <p class="text-sm text-gray-500 mb-2">Nivel: <span class="font-bold ${levelColor}">${activeIncident.nivel}</span> | Fecha: ${activeIncident.fecha}</p>
+                    <p class="text-sm text-gray-500 mb-4">Estado Actual: <span class="font-bold text-primary">${activeIncident.estado}</span></p>
+                    <div class="map-sim h-40 w-full rounded-lg mt-3 mb-4 flex items-center justify-center text-white text-xs">Ubicación de Emergencia Simulada</div>
+                    <p class="font-semibold text-dark-gray mb-1">Descripción del Ciudadano:</p>
+                    <p class="text-sm text-gray-700 p-2 bg-gray-50 rounded-lg">${activeIncident.descripcion}</p>
+                    
+                    ${nextStatus && nextStatus !== 'Cerrar Caso' ? 
+                        ` <button onclick="updateIncidentStatusAgent('${activeIncident.id}', '${nextStatus}')" class="w-full p-3 rounded-lg bg-primary text-white font-bold mt-3 hover:bg-primary/90"> 
+                            Marcar como: ${nextStatus} ${createIcon('chevron-right', 20, 'ml-2')} 
+                        </button> ` : ''}
+
+                    ${nextStatus === 'Cerrar Caso' ? 
+                        ` <button onclick="navigate('agent-close-form', 'agente')" class="w-full p-3 rounded-lg bg-confirm text-white font-bold mt-3 hover:bg-confirm/90"> 
+                            FINALIZAR Y CERRAR CASO 
+                        </button> ` : ''}
+                </div>
+            `;
+        }
+        
+        function updateIncidentStatusAgent(id, newStatus) {
+            const inc = incidentes.find(i => i.id === id);
+            if (inc) {
+                inc.estado = newStatus;
+                alert(`Incidente ${id} actualizado a: ${newStatus}`);
+                navigate('agent-incident-detail', 'agente');
+            }
+        }
+        
+        function getAgentCloseFormContent(incidentId) {
+            return `
+                <h2 class="text-2xl font-bold text-primary mb-6">Cierre de Caso: ${incidentId}</h2>
+                <div class="bg-white p-6 rounded-xl shadow-lg">
+                    <p class="text-lg font-semibold mb-4">Detalles del Cierre</p>
+                    
+                    <label for="close-notes" class="block font-medium mb-1">Observaciones Finales (Obligatorio)</label>
+                    <textarea id="close-notes" rows="4" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50" placeholder="Ej: Se logró recuperar el objeto robado. Se detuvo a un sospechoso."></textarea>
+                    
+                    <label for="close-result" class="block font-medium mb-1 mt-4">Resultado</label>
+                    <select id="close-result" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50">
+                        <option value="Resuelto">Resuelto con éxito</option>
+                        <option value="Transferido">Transferido a otra unidad</option>
+                        <option value="No Procedente">No Procedente/Cancelado</option>
+                    </select>
+                    
+                    <button onclick="submitCloseForm('${incidentId}')" class="w-full p-3 rounded-lg bg-confirm text-white font-bold mt-6 hover:bg-confirm/90">
+                        Confirmar Cierre de Caso
+                    </button>
+                    <button onclick="navigate('agent-incident-detail', 'agente')" class="w-full p-3 rounded-lg bg-gray-200 text-dark-gray font-semibold mt-3 hover:bg-gray-300">
+                        Volver
+                    </button>
+                </div>
+            `;
+        }
+        
+        // CRÍTICO: Modificado para usar updateStaticAgentStatus
+        function submitCloseForm(id) {
+            const inc = incidentes.find(i => i.id === id);
+            const currentAgent = getCurrentAgentSimulated();
+            const result = document.getElementById('close-result').value;
+            const notes = document.getElementById('close-notes').value;
+
+            if (!notes) {
+                alert('Las observaciones finales son obligatorias para el cierre.');
+                return;
+            }
+
+            if (inc) {
+                inc.estado = result; 
+                inc.observacionesCierre = notes;
+                
+                // Agente vuelve a estar disponible (actualizar estático)
+                updateStaticAgentStatus(currentAgent.id, 'En Servicio'); 
+                
+                // Buscar el usuario y actualizar el estado
+                const user = users.find(u => String(u.id) === currentAgent.id);
+                if(user) user.estado = 'Activo'; 
+
+                alert(`Caso ${id} cerrado como: ${result}. Agente disponible.`);
+            }
+            setActiveIncidentIdAgent(null);
+            navigate('agent-home', 'agente');
+        }
+
+
+        // ====================================================================
+        // C. Plataforma Web (Operador / Admin)
+        // ====================================================================
+
+        function getWebLayout(role) {
+            const isOperator = role === 'operador';
+            const navItems = isOperator ? [
+                { id: 'operator-dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
+                { id: 'operator-incidents', icon: 'list-todo', label: 'Gestión de Incidentes' },
+                { id: 'operator-notifications', icon: 'send', label: 'Notificaciones SMSC' },
+            ] : [
+                { id: 'admin-users', icon: 'users', label: 'Gestión de Usuarios' },
+                { id: 'admin-alerts', icon: 'shield-alert', label: 'Reglas de Alerta' },
+                { id: 'admin-zones', icon: 'map', label: 'Zonas de Patrullaje' },
+                { id: 'admin-reports', icon: 'bar-chart-3', label: 'Reportes y Analíticas' },
+            ];
+
+            const sidebar = `
+                <div class="w-16 md:w-64 bg-primary text-white flex flex-col p-2 md:p-4 shadow-2xl transition-all duration-300">
+                    <div class="text-xl font-bold mb-8 p-1 md:p-2 border-b border-primary/50">
+                        <span class="hidden md:block">SMSC - ${isOperator ? 'Operador' : 'Admin'}</span>
+                        <span class="block md:hidden">SMSC</span>
+                    </div>
+                    <nav class="flex-grow space-y-2">
+                        ${navItems.map(item => `
+                            <button onclick="navigate('${item.id}', '${role}')" class="w-full flex items-center p-2 rounded-lg hover:bg-primary/80 transition ${currentScreen === item.id ? 'bg-primary/70 border-l-4 border-secondary' : ''}">
+                                ${createIcon(item.icon, 20, 'mr-0 md:mr-3')}
+                                <span class="hidden md:block">${item.label}</span>
+                            </button>
+                        `).join('')}
+                    </nav>
+                    <div class="mt-8 pt-4 border-t border-primary/50">
+                        <button onclick="navigate('login', 'guest'); currentUser = null;" class="w-full flex items-center p-2 rounded-lg hover:bg-critical/80 transition bg-critical/50">
+                            ${createIcon('log-out', 20, 'mr-0 md:mr-3')}
+                            <span class="hidden md:block">Cerrar Sesión</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            let content;
+            switch (currentScreen) {
+                case 'operator-dashboard':
+                    content = getOperatorDashboardContent();
+                    break;
+                case 'operator-incidents':
+                    content = getOperatorIncidentsContent();
+                    break;
+                case 'operator-incident-detail':
+                    content = getOperatorIncidentDetailContent();
+                    break;
+                case 'operator-notifications':
+                    content = getOperatorNotificationsContent();
+                    break;
+                case 'admin-users':
+                    content = getAdminUsersContent();
+                    break;
+                case 'admin-alerts':
+                    content = getAdminAlertsContent();
+                    break;
+                case 'admin-zones':
+                    content = getAdminZonesContent();
+                    break;
+                case 'admin-reports':
+                    content = getAdminReportsContent();
+                    break;
+                default:
+                    content = `
+                        <div class="p-8 text-center text-gray-500">
+                            <h2 class="text-3xl font-bold">Bienvenido al Panel de ${role.charAt(0).toUpperCase() + role.slice(1)}</h2>
+                            <p class="mt-4">Selecciona una opción del menú lateral.</p>
+                        </div>
+                    `;
+                    break;
+            }
+
+            return `
+                <div class="web-frame">
+                    ${sidebar}
+                    <main class="flex-1 p-6 overflow-y-auto">
+                        ${content}
+                    </main>
+                </div>
+            `;
+        }
+        
+        // Operador
+        function setActiveIncidentId(id) { activeIncidentId = id; }
+
+        function getOperatorDashboardContent() {
+            const agentList = getAgentList(); // Usar la lista completa
+            const pendingIncidents = incidentes.filter(i => i.estado === 'Recibido' || i.estado === 'Verificado').length;
+            const highPriorityIncidents = incidentes.filter(i => i.nivel === 'Alto' && i.estado !== 'Resuelto').length;
+            const agentsOnDuty = agentList.filter(a => a.estado === 'En Servicio' || a.estado === 'Ocupado').length;
+            const activeAgents = agentList.filter(a => a.estado === 'En Servicio').length;
+            const assignedAgents = agentList.filter(a => a.estado === 'Ocupado').length;
+
+
+            return `
+                <div id="operator-dashboard-view" class="p-4 rounded-xl transition-all duration-500">
+                    <h1 class="text-3xl font-bold text-dark-gray mb-6 flex items-center">${createIcon('layout-dashboard', 32, 'mr-3')} Dashboard de Operaciones</h1>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <div class="p-4 bg-secondary/10 rounded-lg border-l-4 border-secondary shadow-sm">
+                            <p class="text-sm text-gray-600">Incidentes Pendientes (Verificar/Asignar)</p>
+                            <p class="text-2xl font-bold text-secondary">${pendingIncidents}</p>
+                        </div>
+                        <div class="p-4 bg-critical/10 rounded-lg border-l-4 border-critical shadow-sm">
+                            <p class="text-sm text-gray-600">Reportes Alta Prioridad</p>
+                            <p class="text-2xl font-bold text-critical">${highPriorityIncidents}</p>
+                        </div>
+                        <div class="p-4 bg-confirm/10 rounded-lg border-l-4 border-confirm shadow-sm">
+                            <p class="text-sm text-gray-600">Agentes Disponibles</p>
+                            <p class="text-2xl font-bold text-confirm">${activeAgents}</p>
+                        </div>
+                        <div class="p-4 bg-primary/10 rounded-lg border-l-4 border-primary shadow-sm">
+                            <p class="text-sm text-gray-600">Casos en Atención</p>
+                            <p class="text-2xl font-bold text-primary">${assignedAgents}</p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-xl font-semibold text-dark-gray mb-3 flex items-center">${createIcon('map', 20, 'mr-2')} Mapa de Operaciones en Vivo</h3>
+                    <div class="map-sim h-96 w-full rounded-lg relative border border-gray-300">
+                        ${agentList.filter(a => a.estado === 'En Servicio').map((a, index) => `<div class="absolute top-[${20 + index * 10}%] left-[${20 + index * 10}%] p-1 rounded-full bg-confirm text-white text-xs font-bold flex items-center">${createIcon('user', 12, 'mr-1')} ${a.id} (Disp)</div>`).join('')}
+                        ${agentList.filter(a => a.estado === 'Ocupado').map((a, index) => `<div class="absolute top-[${10 + index * 10}%] right-[${10 + index * 10}%] p-1 rounded-full bg-secondary text-white text-xs font-bold flex items-center">${createIcon('user', 12, 'mr-1')} ${a.id} (Ocup)</div>`).join('')}
+                        
+                        ${incidentes.filter(i => i.nivel === 'Alto' && i.estado !== 'Resuelto').map((i, index) => `<div class="absolute top-[${50 + index * 5}%] left-[${70 - index * 5}%] p-1 rounded-full bg-critical text-white text-xs font-bold flex items-center">${createIcon('alert-triangle', 12, 'mr-1')} ${i.id}</div>`).join('')}
+                        
+                        <div class="absolute top-[15%] left-[10%] w-48 h-32 border-2 border-primary rounded-xl flex items-center justify-center text-primary text-xs font-bold">ZONA 001</div>
+                        <div class="absolute top-[70%] right-[30%] p-1 rounded-full bg-black text-white text-xs font-bold flex items-center">${createIcon('pin', 12, 'mr-1')} PIC (Colegio)</div>
+                    </div>
+
+                    <div class="mt-6">
+                        <h3 class="text-xl font-semibold text-dark-gray mb-3 flex items-center">${createIcon('list-todo', 20, 'mr-2')} Últimos Incidentes Recibidos</h3>
+                        <div class="space-y-2">
+                            ${incidentes.slice(0, 3).map(i => {
+                                const statusColor = getOperatorStatusColor(i.estado);
+                                return `
+                                    <div class="p-3 bg-white border border-gray-200 rounded-lg flex justify-between items-center hover:shadow-sm transition">
+                                        <div>
+                                            <p class="font-semibold text-dark-gray">${i.tipo} (${i.id})</p>
+                                            <p class="text-xs text-gray-500">${i.fecha}</p>
+                                        </div>
+                                        <span class="px-3 py-1 text-xs font-bold text-white rounded-full ${statusColor}">${i.estado}</span>
+                                        <button onclick="setActiveIncidentId('${i.id}'); navigate('operator-incident-detail', 'operador');" class="text-sm text-primary font-semibold hover:underline">Ver</button>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // CRÍTICO: Modificado para mostrar Reportero y mejorar el orden de la tabla
+        function getOperatorIncidentsContent() {
+            const agentList = getAgentList(); // Usar la lista completa
+            // Ordenar: Recibido/Verificado (Pendiente) primero, luego por nivel (Alto)
+            const sortedIncidents = incidentes.sort((a, b) => {
+                // 1. Recibido/Verificado (sin asignar) primero
+                const statusA = a.estado === 'Recibido' || a.estado === 'Verificado' ? 0 : 1;
+                const statusB = b.estado === 'Recibido' || b.estado === 'Verificado' ? 0 : 1;
+                if (statusA !== statusB) return statusA - statusB;
+
+                // 2. Luego por Nivel (Alto primero)
+                const levelOrder = { 'Alto': 0, 'Medio': 1, 'Bajo': 2 };
+                return levelOrder[a.nivel] - levelOrder[b.nivel];
+            });
+            
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('list-todo', 28, 'mr-3')} Gestión de Incidentes</h2>
+                    <div class="mb-4 text-sm text-gray-600">
+                        <p class="font-semibold">Filtro Rápido:</p>
+                        <div class="flex space-x-2 mt-1">
+                            <span class="px-2 py-1 bg-secondary/20 text-secondary rounded-full text-xs">Pendientes (Recibido/Verificado)</span>
+                            <span class="px-2 py-1 bg-critical/20 text-critical rounded-full text-xs">Alto Nivel</span>
+                            <span class="px-2 py-1 bg-confirm/20 text-confirm rounded-full text-xs">Asignados</span>
+                        </div>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID / Tipo</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reportero</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nivel</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agente Asignado</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${sortedIncidents.map(inc => {
+                                    const levelColor = inc.nivel === 'Alto' ? 'text-critical' : (inc.nivel === 'Medio' ? 'text-secondary' : 'text-confirm');
+                                    const statusColor = getOperatorStatusColor(inc.estado);
+                                    
+                                    // CRÍTICO: Buscar el nombre en la lista definitiva
+                                    const assignedAgent = agentList.find(a => a.id === inc.agenteAsignado);
+
+                                    return `
+                                        <tr>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <div class="text-sm font-medium text-dark-gray">${inc.id}</div>
+                                                <div class="text-xs text-gray-500">${inc.tipo}</div>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <div class="text-sm text-dark-gray">${inc.reportero || 'N/A'}</div>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${levelColor.replace('text-', 'bg-')}/20 ${levelColor}">${inc.nivel}</span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">${inc.estado}</span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="text-sm text-dark-gray">${assignedAgent?.nombre || inc.agenteAsignado || 'PENDIENTE'}</span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <button onclick="setActiveIncidentId('${inc.id}'); navigate('operator-incident-detail', 'operador');" class="text-primary hover:text-primary/80 font-semibold">Ver Detalle</button>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // CRÍTICO: Modificado para gestionar la asignación y mostrar al reportero
+        function getOperatorIncidentDetailContent() {
+            // Intenta encontrar el incidente activo, si no existe, usa el primer incidente pendiente.
+            const inc = incidentes.find(i => i.id === activeIncidentId) || incidentes.find(i => i.estado === 'Recibido') || incidentes[0];
+            if (!inc) return `<div>Incidente no encontrado.</div>`;
+
+            // Flujo de estados para la gestión del operador
+            const statusFlow = ['Recibido', 'Verificado', 'Asignado', 'En atención', 'Resuelto'];
+            const currentStatusIndex = statusFlow.indexOf(inc.estado);
+            const nextStatus = statusFlow[currentStatusIndex + 1];
+            
+            // CRÍTICO: Usar getAgentList() para obtener la lista completa y actualizada
+            const availableAgents = getAgentList().filter(a => a.estado === 'En Servicio');
+            const assignedAgent = getAgentList().find(a => a.id === inc.agenteAsignado);
+            
+            const showAssignment = inc.estado === 'Recibido' || inc.estado === 'Verificado';
+            const levelColor = inc.nivel === 'Alto' ? 'text-critical' : (inc.nivel === 'Medio' ? 'text-secondary' : 'text-confirm');
+
+            return `
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                        <h2 class="text-3xl font-bold text-primary mb-2">Incidente ${inc.id}</h2>
+                        <p class="text-sm text-gray-500">Reportado el ${inc.fecha} por: <span class="font-semibold text-dark-gray">${inc.reportero || 'N/A'}</span></p>
+
+                        <div class="mt-4 pt-4 border-t border-gray-200">
+                            <p class="font-semibold flex items-center">${createIcon('alert-triangle', 18, 'mr-2')} Tipo:</p>
+                            <p class="text-xl font-bold text-dark-gray ml-6">${inc.tipo} (<span class="${getOperatorStatusColor(inc.nivel)} px-2 rounded-full text-sm text-white">${inc.nivel}</span>)</p>
+                            <p class="font-semibold flex items-center mt-3">${createIcon('info', 18, 'mr-2')} Descripción:</p>
+                            <p class="text-sm text-dark-gray ml-6 bg-gray-50 p-3 rounded-lg">${inc.descripcion}</p>
+                        </div>
+
+                        <div class="mt-4 pt-4 border-t border-gray-200">
+                            <h3 class="text-xl font-bold text-dark-gray mb-3">Mapa de Ubicación</h3>
+                            <div class="map-sim h-64 w-full rounded-lg relative border border-gray-300 flex items-center justify-center text-white font-bold">Ubicación Reportada: Lat ${inc.coords.lat}, Lng ${inc.coords.lng}</div>
+                        </div>
+
+                        ${nextStatus && nextStatus !== 'Asignado' && nextStatus !== 'En atención' && nextStatus !== 'Resuelto' ? `
+                            <button onclick="updateIncidentStatusOp('${inc.id}', '${nextStatus}')" class="w-full p-3 rounded-lg bg-secondary text-primary font-bold mt-4 hover:bg-secondary/90">
+                                Marcar como: ${nextStatus} (Verificado) ${createIcon('chevron-right', 20, 'ml-2')}
+                            </button>
+                        ` : ''}
+
+                        ${inc.estado === 'Asignado' || inc.estado === 'Ayuda en camino' || inc.estado === 'En atención' ? `
+                            <div class="mt-4 p-3 bg-confirm/10 rounded-lg text-confirm font-semibold">
+                                Agente Asignado: ${assignedAgent?.nombre || inc.agenteAsignado || 'N/A'} - Estado: ${inc.estado}
+                            </div>
+                        ` : ''}
+
+
+                        <button onclick="if(confirm('¿Confirmas que este incidente no procede y debe ser cancelado?')){ updateIncidentStatusOp('${inc.id}', 'No Procedente'); }" class="w-full p-2 text-sm rounded-lg bg-gray-200 text-dark-gray font-semibold mt-4 hover:bg-gray-300">
+                            Marcar como No Procedente / Cancelar
+                        </button>
+                    </div>
+
+
+                    <div class="lg:col-span-1">
+                        ${showAssignment ? `
+                            <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-primary">
+                                <h3 class="text-xl font-bold text-primary mb-4 flex items-center">${createIcon('user-plus', 20, 'mr-2')} Asignar Agente</h3>
+                                <p class="text-sm text-gray-700 mb-4">Selecciona un Agente disponible para atender el caso y cambiar su estado a **'Asignado'**.</p>
+                                
+                                <label for="agent-assign" class="block text-sm font-medium text-dark-gray mb-1">Agentes en Servicio (${availableAgents.length})</label>
+                                <select id="agent-assign" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2">
+                                    <option value="">Seleccionar Agente...</option>
+                                    ${availableAgents.map(a => `<option value="${a.id}">${a.nombre} (${a.id})</option>`).join('')}
+                                </select>
+                                
+                                <button onclick="assignAgent('${inc.id}')" ${availableAgents.length === 0 ? 'disabled' : ''} class="w-full p-3 rounded-lg bg-confirm text-white font-bold mt-4 hover:bg-confirm/90 disabled:opacity-50">
+                                    ${createIcon('send', 20, 'mr-2')} Asignar y Notificar
+                                </button>
+
+                                ${availableAgents.length === 0 ? `<p class="text-critical text-xs mt-2">🚨 No hay agentes en estado "En Servicio".</p>` : ''}
+                            </div>
+                        ` : `
+                            <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-confirm">
+                                <h3 class="text-xl font-bold text-confirm mb-4 flex items-center">${createIcon('user-check', 20, 'mr-2')} Caso Asignado</h3>
+                                <p class="text-lg font-semibold text-dark-gray mb-2">Agente: ${assignedAgent?.nombre || inc.agenteAsignado || 'N/A'}</p>
+                                <p class="text-sm text-gray-500">El agente ya fue notificado y está en proceso de atención. Estado actual: <span class="font-bold text-primary">${inc.estado}</span>.</p>
+                                
+                                <button onclick="if(confirm('¿Deseas re-asignar este caso a otro agente?')){ updateIncidentStatusOp('${inc.id}', 'Verificado'); inc.agenteAsignado=null; navigate('operator-incident-detail', 'operador'); }" class="w-full p-3 text-sm rounded-lg bg-gray-100 text-primary font-semibold mt-4 hover:bg-gray-200">
+                                    Re-asignar
+                                </button>
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateIncidentStatusOp(id, newStatus) {
+            const inc = incidentes.find(i => i.id === id);
+            if (inc) {
+                inc.estado = newStatus;
+                // Si el estado es 'Verificado' y es Alto, mantener la alerta.
+                if (newStatus === 'Verificado' && inc.nivel === 'Alto') {
+                    toggleHighAlert(true);
+                } else if (newStatus === 'Resuelto' || newStatus === 'No Procedente') {
+                    toggleHighAlert(false);
+                }
+
+                if (newStatus === 'Asignado' && !inc.agenteAsignado) {
+                    alert(`El estado ${newStatus} requiere un agente. Por favor, asigne uno. El estado se actualizó a 'Asignado', pero el agente asignado es PENDIENTE.`);
+                } else {
+                    alert(`Incidente ${id} actualizado a: ${newStatus}`);
+                }
+                activeIncidentId = id;
+                navigate('operator-incident-detail', 'operador');
+            }
+        }
+        
+        /**
+         * Lógica de asignación de agente para el operador
+         * CORREGIDO: Actualiza el estado del agente en la lista estática (`agentes`) 
+         * para que `getAgentList` lo recoja como 'Ocupado'.
+         */
+        function assignAgent(id) {
+            const agentId = document.getElementById('agent-assign').value;
+            
+            if (!agentId) { 
+                alert('Por favor, selecciona un Agente disponible de la lista antes de asignar.');
+                return;
+            }
+
+            const inc = incidentes.find(i => i.id === id);
+            // Buscar agente en la lista definitiva
+            const agentList = getAgentList();
+            const agent = agentList.find(a => a.id === agentId); 
+            
+            if (inc && agent) {
+                inc.agenteAsignado = agentId;
+                inc.estado = 'Asignado'; // Establece el estado para que el agente lo reciba
+                
+                // CRÍTICO: Actualizar el estado del agente a 'Ocupado' en la lista estática
+                updateStaticAgentStatus(agent.id, 'Ocupado');
+                
+                // Notificar/Alertar (simulación)
+                alert(`✅ Agente ${agentId} (${agent.nombre}) asignado a ${id}. Estado actualizado a Asignado. El agente ha sido marcado como 'Ocupado' y recibirá una notificación.`);
+                
+                // Re-renderizar la vista de detalle
+                activeIncidentId = id;
+                navigate('operator-incident-detail', 'operador');
+            } else {
+                // Mensaje de error más detallado en caso de fallo de búsqueda (datos inconsistentes)
+                console.error('Error de Asignación. Datos:', { 
+                    incidentId: id, 
+                    agentId: agentId, 
+                    incidentFound: !!inc, 
+                    agentFound: !!agent, 
+                    agentesDisponibles: agentList.filter(a => a.estado === 'En Servicio').map(a => a.id)
+                });
+                alert(`Error en la asignación: No se encontró el incidente o el agente con el ID '${agentId}'. Verifica la consola para más detalles.`);
+            }
+        }
+
+        function getOperatorNotificationsContent() {
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('send', 28, 'mr-3')} Sistema de Notificaciones SMSC</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <h3 class="text-xl font-bold text-dark-gray mb-3">Enviar Alerta Ciudadana</h3>
+                            <label for="alert-title" class="block text-sm font-medium mb-1">Título</label>
+                            <input type="text" id="alert-title" class="w-full p-2 border border-gray-300 rounded-lg mb-3">
+                            <label for="alert-message" class="block text-sm font-medium mb-1">Mensaje</label>
+                            <textarea id="alert-message" rows="3" class="w-full p-2 border border-gray-300 rounded-lg mb-3"></textarea>
+                            <label for="alert-zone" class="block text-sm font-medium mb-1">Zona de Cobertura (Simulación)</label>
+                            <select id="alert-zone" class="w-full p-2 border border-gray-300 rounded-lg mb-4">
+                                <option>Toda la Jurisdicción</option>
+                                <option>Z-001 Centro Histórico</option>
+                                <option>Cerca de INC-001</option>
+                            </select>
+                            <button onclick="sendNotification()" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90">
+                                ${createIcon('bell', 20, 'mr-2')} Enviar Alerta Masiva
+                            </button>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <h3 class="text-xl font-bold text-dark-gray mb-3">Historial de Alertas Enviadas</h3>
+                            <ul class="space-y-2">
+                                <li class="p-2 border border-gray-200 rounded-lg text-sm bg-white">Alerta: Robo en Zona Céntrica (2025-11-01)</li>
+                                <li class="p-2 border border-gray-200 rounded-lg text-sm bg-white">Alerta: Manifestación en Av. Principal (2025-10-25)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function sendNotification() {
+            const title = document.getElementById('alert-title').value;
+            const message = document.getElementById('alert-message').value;
+            if (title && message) {
+                alert(`Alerta enviada:\nTítulo: ${title}\nMensaje: ${message}\n(Simulación de envío masivo)`);
+                document.getElementById('alert-title').value = '';
+                document.getElementById('alert-message').value = '';
+            } else {
+                alert('Por favor, completa el título y el mensaje de la alerta.');
+            }
+        }
+
+        // Administrador
+        function getAdminUsersContent() {
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('users', 28, 'mr-3')} Gestión de Usuarios y Roles</h2>
+                    <div class="mb-4 text-lg font-semibold text-dark-gray">
+                        Usuarios Pendientes de Aprobación: <span class="text-secondary">${users.filter(u => u.estado === 'Pendiente').length}</span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DNI / Nombre</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rol</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${users.map(user => {
+                                    const statusColor = user.estado === 'Activo' ? 'bg-confirm/20 text-confirm' : user.estado === 'Pendiente' ? 'bg-secondary/20 text-secondary' : 'bg-critical/20 text-critical';
+                                    return `
+                                        <tr>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <div class="text-sm font-medium text-dark-gray">${user.dni}</div>
+                                                <div class="text-sm text-gray-500">${user.nombre}</div>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-dark-gray">${user.rol}</span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span id="status-${user.id}" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">${user.estado}</span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                ${user.estado === 'Pendiente' ? `<button onclick="handleApproveUser(${user.id})" class="text-confirm hover:text-confirm/80 mr-3">Aprobar</button>` : ''}
+                                                <button onclick="handleToggleStatus(${user.id})" class="text-primary hover:text-primary/80 mr-3">${user.estado === 'Activo' ? 'Suspender' : 'Activar'}</button>
+                                                <button onclick="handleRoleChange(${user.id})" class="text-secondary hover:text-secondary/80">Cambiar Rol</button>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // CRÍTICO: Modificado para agregar el agente a la lista estática si es necesario
+        function handleApproveUser(id) {
+            const user = users.find(u => u.id === id);
+            if (user && user.estado === 'Pendiente') {
+                user.estado = 'Activo';
+                
+                // Si es un agente, asegurar que entre en la lista de agentes como "En Servicio"
+                if (user.rol === 'Agente') {
+                    updateStaticAgentStatus(user.id, 'En Servicio');
+                }
+
+                // CRÍTICO: Si el user aprobado es el que está logeado, actualizar su estado
+                if (currentUser && currentUser.id === id) {
+                    currentUser.estado = 'Activo';
+                }
+                alert(`Usuario ${user.nombre} aprobado. Estado: Activo. Ya puede reportar incidentes.`);
+            } else {
+                alert('El usuario no está Pendiente o no existe.');
+            }
+            navigate('admin-users', 'admin');
+        }
+
+        function handleToggleStatus(id) {
+            const user = users.find(u => u.id === id);
+            if (user) {
+                user.estado = user.estado === 'Activo' ? 'Suspendido' : 'Activo';
+                
+                // Si es un agente, actualizar su estado de servicio también
+                if (user.rol === 'Agente') {
+                    const newServiceStatus = user.estado === 'Activo' ? 'En Servicio' : 'Fuera de servicio';
+                    updateStaticAgentStatus(user.id, newServiceStatus);
+                }
+
+                // CRÍTICO: Si el user es el logeado, forzar logout (simulación)
+                 if (currentUser && currentUser.id === id) {
+                    currentUser = null;
+                    navigate('login', 'guest');
+                    return; 
+                }
+                alert(`Estado de ${user.nombre} cambiado a: ${user.estado}`);
+            }
+            navigate('admin-users', 'admin');
+        }
+
+        function handleRoleChange(id) {
+            const user = users.find(u => u.id === id);
+            if (user) {
+                const newRole = prompt(`Cambiar rol de ${user.nombre} (${user.rol}). Ingresa el nuevo rol (Ciudadano, Agente, Operador, Admin):`);
+                if (newRole && ['Ciudadano', 'Agente', 'Operador', 'Admin'].includes(newRole)) {
+                    user.rol = newRole;
+                    // Forzar el recálculo de la lista de agentes si el rol fue cambiado
+                    if (newRole === 'Agente') {
+                         // Si se cambia a Agente, asegurar que entre en la lista estática si está activo
+                         if(user.estado === 'Activo') updateStaticAgentStatus(user.id, 'En Servicio');
+                    }
+                    alert(`Rol de ${user.nombre} cambiado a: ${newRole}`);
+                } else if (newRole !== null) {
+                    alert('Rol no válido o vacío.');
+                }
+            }
+            navigate('admin-users', 'admin');
+        }
+
+
+        function getAdminAlertsContent() {
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('shield-alert', 28, 'mr-3')} Configuración de Reglas de Alerta</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div class="md:col-span-2 space-y-4">
+                            ${reglas.map(n => `
+                                <div class="p-4 border border-gray-200 rounded-lg">
+                                    <h3 class="text-xl font-bold text-dark-gray">${n.tipo} - <span class="${n.nivel === 'Alto' ? 'text-critical' : n.nivel === 'Medio' ? 'text-secondary' : 'text-confirm'}">${n.nivel}</span></h3>
+                                    <p class="mt-2 text-sm font-semibold">Condiciones de Activación:</p>
+                                    <ul class="list-disc list-inside text-sm text-gray-700">
+                                        ${n.reglas.map(r => `<li>${r}</li>`).join('')}
+                                    </ul>
+                                    <p class="mt-2 text-sm font-semibold">Acciones del Sistema:</p>
+                                    <p class="text-sm text-gray-700 ml-4">${n.acciones}</p>
+                                    <button onclick="alert('Simulación: Editar Regla ${n.id}')" class="mt-3 text-sm text-primary hover:text-primary/80 font-semibold">Editar</button>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="md:col-span-2 p-4 border border-gray-300 rounded-lg">
+                            <h3 class="text-xl font-bold mb-4">Añadir Nueva Regla</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Tipo de Incidente</label>
+                                    <input type="text" id="new-rule-type" class="w-full p-2 border border-gray-300 rounded-lg">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Nivel de Prioridad</label>
+                                    <select id="new-rule-level" class="w-full p-2 border border-gray-300 rounded-lg">
+                                        <option value="Bajo">Bajo</option>
+                                        <option value="Medio">Medio</option>
+                                        <option value="Alto">Alto</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <label class="block text-sm font-medium mb-1 mt-4">Condiciones (separadas por coma)</label>
+                            <textarea id="new-rule-conditions" class="w-full p-2 border border-gray-300 rounded-lg mb-4" rows="2"></textarea>
+                            <label class="block text-sm font-medium mb-1">Acciones del Sistema</label>
+                            <input type="text" id="new-rule-actions" class="w-full p-2 border border-gray-300 rounded-lg mb-4">
+                            <button onclick="handleNewRule()" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90">Guardar Regla</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        function handleNewRule() {
+            const type = document.getElementById('new-rule-type').value;
+            const level = document.getElementById('new-rule-level').value;
+            const conditions = document.getElementById('new-rule-conditions').value.split(',').map(c => c.trim()).filter(c => c);
+            const actions = document.getElementById('new-rule-actions').value;
+
+            if (type && level && conditions.length > 0 && actions) {
+                const newId = reglas.length + 1;
+                reglas.push({
+                    id: newId,
+                    tipo: type,
+                    nivel: level,
+                    reglas: conditions,
+                    acciones: actions
+                });
+                alert(`Nueva regla de alerta para ${type} (Nivel ${level}) añadida.`);
+                navigate('admin-alerts', 'admin');
+            } else {
+                alert('Por favor, completa todos los campos para la nueva regla.');
+            }
+        }
+
+        function getAdminZonesContent() {
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('map', 28, 'mr-3')} Gestión de Zonas de Patrullaje</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="space-y-4">
+                            ${zonas.map(z => `
+                                <div class="p-4 border border-gray-200 rounded-lg">
+                                    <h3 class="text-xl font-bold text-dark-gray">${z.nombre} (${z.id})</h3>
+                                    <p class="text-sm text-gray-700 mt-2">Puntos de Coordenada: ${z.coords.length}</p>
+                                    <p class="text-xs text-gray-500">Color en Mapa: ${z.color}</p>
+                                    <button onclick="alert('Simulación: Editar Zona ${z.id}')" class="mt-3 text-sm text-primary hover:text-primary/80 font-semibold">Editar</button>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="p-4 border border-gray-300 rounded-lg">
+                            <h3 class="text-xl font-bold mb-4">Mapa de Zonas</h3>
+                            <div class="map-sim h-64 w-full rounded-lg relative border border-gray-300">
+                                <div class="absolute top-[20%] left-[10%] w-48 h-32 border-4 border-dashed border-secondary rounded-xl flex items-center justify-center text-secondary text-xs font-bold">Nueva Zona</div>
+                            </div>
+                            <button onclick="alert('Simulación: Interfaz para dibujar/configurar Nueva Zona')" class="w-full p-3 rounded-lg bg-secondary text-primary font-bold mt-4 hover:bg-secondary/90">Añadir Nueva Zona</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function getAdminReportsContent() {
+            return `
+                <div class="p-4 bg-white rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-primary flex items-center mb-6 border-b pb-4">${createIcon('bar-chart-3', 28, 'mr-3')} Reportes y Analíticas</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-gray-50 p-4 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-bold text-dark-gray mb-3">Incidentes por Nivel</h3>
+                            <div class="h-32 bg-gray-200 rounded-lg flex items-center justify-center text-sm">Gráfico de Barras Simuladas (Alto: ${incidentes.filter(i => i.nivel === 'Alto').length}, Medio: ${incidentes.filter(i => i.nivel === 'Medio').length}, Bajo: ${incidentes.filter(i => i.nivel === 'Bajo').length})</div>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-bold text-dark-gray mb-3">Tiempos de Respuesta Promedio</h3>
+                            <div class="h-32 bg-gray-200 rounded-lg flex items-center justify-center text-sm">KIP Simulados (Verificación: 5 min, Asignación: 10 min, Cierre: 45 min)</div>
+                        </div>
+                        <div class="md:col-span-2">
+                             <h3 class="text-xl font-bold text-dark-gray mb-3">Generar Reporte Personalizado</h3>
+                            <select class="w-full p-3 border border-gray-300 rounded-lg mb-3">
+                                <option>Reporte de Desempeño por Agente</option>
+                                <option>Reporte de Incidencias por Zona</option>
+                                <option>Reporte de Aprobaciones de Usuarios</option>
+                            </select>
+                            <button onclick="alert('Simulación: Generando Reporte en PDF/Excel')" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90">Generar Reporte</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ====================================================================
+        // D. Login/Registro
+        // ====================================================================
+
+        // Contenido de la Pantalla de Login
+        function getLoginView() {
+            const isRegister = currentScreen === 'register';
+            const isRecover = currentScreen === 'recover';
+
+            if (isRecover) {
+                 // Recuperación de contraseña (simulación)
+                return `
+                    <div class="p-8 bg-white rounded-xl shadow-2xl w-full max-w-sm">
+                        <h2 class="text-3xl font-bold text-primary mb-6 text-center">Recuperar Contraseña</h2>
+                        <form onsubmit="event.preventDefault(); alert('Simulación: Se ha enviado un enlace de recuperación a tu correo.'); navigate('login');">
+                            <div class="mb-4">
+                                <label for="recover-email" class="block text-sm font-medium text-dark-gray mb-1">Correo Electrónico</label>
+                                <input type="email" id="recover-email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="ejemplo@smsc.com" required>
+                            </div>
+                            <button type="submit" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90 transition shadow-md">Enviar Enlace</button>
+                        </form>
+                        <div class="mt-4 text-center">
+                            <button onclick="navigate('login')" class="text-sm text-primary font-semibold hover:underline">Volver al Login</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (isRegister) {
+                // Formulario de Registro
+                return `
+                    <div class="p-6 bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-y-auto h-full">
+                        <h2 class="text-3xl font-bold text-primary mb-6 text-center">Registro de Usuario</h2>
+                        <form onsubmit="event.preventDefault(); handleRegister();">
+                            <div class="mb-4">
+                                <label for="register-name" class="block text-sm font-medium text-dark-gray mb-1">Nombre Completo</label>
+                                <input type="text" id="register-name" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: Juan Perez" required>
+                            </div>
+                            <div class="mb-4">
+                                <label for="register-dni" class="block text-sm font-medium text-dark-gray mb-1">DNI</label>
+                                <input type="text" id="register-dni" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: 00000000" required>
+                            </div>
+                            <div class="mb-4">
+                                <label for="register-email" class="block text-sm font-medium text-dark-gray mb-1">Correo Electrónico</label>
+                                <input type="email" id="register-email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: ejemplo@smsc.com" required>
+                            </div>
+                            <div class="mb-4">
+                                <label for="register-password" class="block text-sm font-medium text-dark-gray mb-1">Contraseña (Mín. 6)</label>
+                                <input type="password" id="register-password" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: ******" required>
+                            </div>
+                            <div class="mb-4">
+                                <label for="register-address" class="block text-sm font-medium text-dark-gray mb-1">Dirección de Residencia</label>
+                                <input type="text" id="register-address" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: Av. Principal 101" required>
+                            </div>
+                            <div class="mb-6">
+                                <label for="register-role" class="block text-sm font-medium text-dark-gray mb-1">Deseo registrarme como:</label>
+                                <select id="register-role" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" required>
+                                    <option value="Ciudadano">Ciudadano</option>
+                                    <option value="Agente">Agente</option>
+                                    <option value="Operador">Operador</option>
+                                    <option value="Admin">Administrador</option>
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">Nota: Todos los registros requieren aprobación de un administrador.</p>
+                            </div>
+                            <button type="submit" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90 transition shadow-md">Registrarse</button>
+                        </form>
+                        <div class="mt-4 text-center">
+                            <button onclick="navigate('login')" class="text-sm text-primary font-semibold hover:underline">¿Ya tienes cuenta? Ingresa aquí</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Vista de Login
+            return `
+
+
+                <form onsubmit="handleLogin(); return false;" class="bg-white p-2 rounded-x1 shadow-lg border-t-1 border-primary">
+                    <div class="mb-9">
+
+
+            
+                <div class="p-8 bg-white rounded-xl shadow-2xl w-full max-w-sm">
+                    <h2 class="text-4xl font-extrabold text-primary mb-4 text-center"></h2>
+                    <div class="text-primary text-4xl font-extrabold flex items-center justify-center">${createIcon('shield-half', 50, 'mr-2')} SMSC</div>
+                    <p class="text-sm text-gray-500 mb-6 text-center">Sistema de Monitoreo de Seguridad Ciudadana</p>
+                    <h1 class="text-2xl font-bold flex items-center justify-center text-dark-gray mt-2">Bienvenido</h1>
+                    <p class="text-sm text-gray-500 mb-6 text-center"></p>
+                    
+                    <form onsubmit="event.preventDefault(); handleLogin();">
+                        <div class="mb-4">
+
+
+                    
+
+                            <label for="login-user" class="block text-sm font-medium text-dark-gray mb-1">DNI o Correo</label>
+                            <input type="text" id="login-user" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="Ej: 00000000/ciudadano@smsc.com" required>
+                        </div>
+                        <div class="mb-6">
+                            <label for="login-pass" class="block text-sm font-medium text-dark-gray mb-1">Contraseña</label>
+                            <input type="password" id="login-pass" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary focus:ring-2" placeholder="******" required>
+                        </div>
+                        <button type="submit" class="w-full p-3 rounded-lg bg-primary text-white font-bold hover:bg-primary/90 transition shadow-md">Ingresar</button>
+                    
+                    
+                        </form>
+                    <div class="mt-4 text-center">
+                        <button onclick="navigate('recover')" class="text-xs text-gray-500 hover:text-primary transition">¿Olvidaste tu contraseña?</button>
+                    </div>
+                    <div class="mt-8 pt-4 border-t border-gray-200 text-center">
+                        <p class="text-sm text-gray-600 mb-2">¿Nuevo usuario?</p>
+                        <button onclick="navigate('register')" class="w-full p-3 rounded-lg bg-secondary text-primary font-bold hover:bg-secondary/90 transition shadow-md">Regístrate Ahora</button>
+                    </div>
+                    <div class="mt-8 pt-4 border-t border-gray-200">
+                        <p class="text-sm font-semibold text-center mb-3">SIMULACIÓN DE ROLES </p>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="document.getElementById('login-user').value='ciudadano@smsc.com'; document.getElementById('login-pass').value='password123'; handleLogin();" class="p-2 rounded-lg bg-blue-100 text-primary text-sm">Ciudadano (Móvil)</button>
+                            <button onclick="document.getElementById('login-user').value='agente@smsc.com'; document.getElementById('login-pass').value='password123'; handleLogin();" class="p-2 rounded-lg bg-blue-100 text-primary text-sm">Agente (Móvil)</button>
+                            <button onclick="document.getElementById('login-user').value='operador@smsc.com'; document.getElementById('login-pass').value='password123'; handleLogin();" class="p-2 rounded-lg bg-green-100 text-confirm text-sm">Operador (Web)</button>
+                            <button onclick="document.getElementById('login-user').value='admin@smsc.com'; document.getElementById('login-pass').value='password123'; handleLogin();" class="p-2 rounded-lg bg-red-100 text-critical text-sm">Administrador (Web)</button>
+                             <button onclick="document.getElementById('login-user').value='mari.p@example.com'; document.getElementById('login-pass').value='password123'; handleLogin();" class="col-span-2 p-2 rounded-lg bg-secondary/30 text-secondary text-sm"> PENDIENTE</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Modificado para usar currentUser y manejar estado Pendiente (CRÍTICO)
+        function handleLogin() {
+            const user = document.getElementById('login-user').value;
+            const pass = document.getElementById('login-pass').value;
+
+            if (!user || !pass) {
+                alert('Por favor, ingresa DNI/Correo y Contraseña.');
+                return;
+            }
+            
+            // Buscar el usuario
+            const foundUser = users.find(u => (u.dni === user || u.email === user) && u.password === pass);
+
+            if (!foundUser) {
+                alert('Credenciales inválidas. Inténtalo de nuevo.');
+                return;
+            }
+
+            // Establecer el usuario actual
+            currentUser = foundUser; 
+            const role = foundUser.rol.toLowerCase();
+
+            if (foundUser.estado === 'Suspendido') {
+                alert('Tu cuenta está suspendida. Contacta al administrador.');
+                currentUser = null;
+                return;
+            }
+
+            if (foundUser.estado === 'Pendiente') {
+                if (role === 'ciudadano') {
+                    // CRÍTICO: Redirigir a vista de registro pendiente para ciudadano
+                    navigate('citizen-register-pending', 'ciudadano'); 
+                    return;
+                } else {
+                     // Si es cualquier otro rol Pendiente (Agente, Operador, Admin)
+                    alert(`⚠️ Error de Acceso: Tu cuenta de ${foundUser.rol} está pendiente de aprobación por el administrador.`);
+                    currentUser = null;
+                    return;
+                }
+            }
+            
+            // Navegación principal para usuarios Activos
+            if (role === 'ciudadano') { navigate('citizen-home', 'ciudadano'); }
+            else if (role === 'agente') { navigate('agent-home', 'agente'); }
+            else if (role === 'operador') { navigate('operator-dashboard', 'operador'); }
+            else if (role === 'admin') { navigate('admin-users', 'admin'); }
+        }
+
+        /**
+         * Lógica de registro para todos los roles.
+         * Se asigna un ID numérico único.
+         */
+        function handleRegister() {
+            const name = document.getElementById('register-name').value;
+            const dni = document.getElementById('register-dni').value;
+            const email = document.getElementById('register-email').value;
+            const password = document.getElementById('register-password').value;
+            const address = document.getElementById('register-address').value;
+            const role = document.getElementById('register-role').value; // NUEVA VARIABLE
+
+            if (!name || !dni || !email || !password || !address || !role) {
+                alert('Por favor, completa todos los campos.');
+                return;
+            }
+
+            // Simulación: Comprobar si ya existe el DNI o email
+            if (users.some(u => u.dni === dni || u.email === email)) {
+                alert('Ya existe un usuario con este DNI o correo.');
+                return;
+            }
+
+            // Simulación: Nuevo usuario con estado 'Pendiente'
+            const newId = users.length + 1;
+            const newUser = {
+                id: newId, // Asignar ID numérico
+                dni: dni,
+                nombre: name,
+                estado: 'Pendiente', // Todos los registros son pendientes
+                rol: role, // Usa el rol seleccionado (Ciudadano/Operador)
+                email: email,
+                password: password,
+                direccion: address // Campo adicional
+            };
+            users.push(newUser);
+
+            alert(`✅ Registro exitoso como ${role}. Tu cuenta ha sido creada y está pendiente de aprobación por un administrador.`);
+            navigate('login', 'guest'); // Volver al login
+        }
+
+        // --- Exposición de Funciones al Ámbito Global (CORRECCIÓN CRÍTICA DE SCOPE) ---
+        // Al usar 'type="module"', necesitamos exponer explícitamente las funciones al objeto 'window'
+        
+        // General
+        window.navigate = navigate;
+        window.toggleHighAlert = toggleHighAlert;
+        window.getOperatorStatusColor = getOperatorStatusColor; 
+        
+        // Ciudadano
+        window.selectIncidentType = selectIncidentType;
+        window.sendReport = sendReport;
+        window.handleLogin = handleLogin;
+        window.handleRegister = handleRegister; // Lógica de registro funcional
+        
+        // Agente
+        window.setAgentStatus = setAgentStatus;
+        window.acceptIncident = acceptIncident;
+        window.rejectIncident = rejectIncident;
+        window.updateIncidentStatusAgent = updateIncidentStatusAgent;
+        window.submitCloseForm = submitCloseForm;
+        window.setActiveIncidentIdAgent = setActiveIncidentIdAgent; 
+
+        // Operador
+        window.setActiveIncidentId = setActiveIncidentId;
+        window.updateIncidentStatusOp = updateIncidentStatusOp;
+        window.assignAgent = assignAgent; // Lógica de asignación funcional y corregida
+        window.sendNotification = sendNotification;
+        
+        // Administrador
+        window.handleApproveUser = handleApproveUser;
+        window.handleToggleStatus = handleToggleStatus;
+        window.handleRoleChange = handleRoleChange;
+        window.handleNewRule = handleNewRule;
+
+
+        // --- Inicialización de la Aplicación ---
+        document.addEventListener('DOMContentLoaded', () => {
+            navigate('login', 'guest'); // Iniciar en la pantalla de Login
+        });
+    </script>
+</body>
+</html>
